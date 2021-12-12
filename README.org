@@ -1,0 +1,206 @@
+#+TITLE: Understanding Matrix multiplication
+#+AUTHOR: Madhavan Krishnan
+#+EMAIL: krishnanmadhavan000@gmail.com
+
+* Objective 
+
+1) Trying to understand the key principles behind matrix multiplication
+   along with performance different between programming language.
+2) How it can be leveraged for algorithums that relies heavily on it (aka
+   neural networks).
+
+** Seting up the environment
+
+#+begin_src sh
+python -m venv .env
+source .env/bin/activate
+pip install numpy seaborn pandas cython
+#+end_src
+
+* Matrix multiplication
+
+** Using Numpy
+
+This is the reference function against which other menthods are to be
+compared.
+
+#+NAME: mm-np
+#+begin_src python :results silent
+def np_matmul(X, Y):
+    from numpy import matmul
+    return matmul(X, Y)
+#+end_src
+
+** Using Python
+
+The pythonic way (List comprehension)
+
+#+NAME: mm-py
+#+begin_src python :results silent
+def py_lc(X, Y):
+    return [[sum(a*b for a,b in zip(X_row,Y_col)) for Y_col in zip(*Y)] for X_row in X]
+#+end_src
+
+** Using Cython
+*** Setup 
+
+#+begin_src python :tangle setup.py
+from distutils.core import setup
+from Cython.Build  import cythonize
+
+setup(ext_modules=cythonize("cpy_mul.pyx"))
+#+end_src
+
+*** Function
+#+NAME:mm_cpy
+#+begin_src python :tangle cpy_mul.pyx
+cpdef list cpy_mul(list X, list Y):
+    cdef int x
+    cdef int y
+    cdef list X_row
+    cdef tuple Y_col
+    cdef int total
+    cdef list result = []
+    for X_row in X:
+        result.append([])
+        for Y_col in zip(*Y):
+            total = 0
+            for x, y in zip(X_row,Y_col):
+                total += x * y
+            result[-1].append(total)
+    return result
+#+end_src
+
+#+RESULTS: mm_cpy
+
+*** Compile
+
+#+begin_src sh :results silent
+python setup.py build_ext --inplace 
+#+end_src
+
+#+begin_example
+Compiling cpy_mul.pyx because it changed.
+[1/1] Cythonizing cpy_mul.pyx
+running build_ext
+building 'cpy_mul' extension
+gcc -pthread -Wno-unused-result -Wsign-compare -DNDEBUG -g -fwrapv -O3 -Wall -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -fno-semantic-interposition -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -march=x86-64 -mtune=generic -O3 -pipe -fno-plt -fPIC -I/home/maddy/org/matrix-mul-py/env/include -I/usr/include/python3.8 -c cpy_mul.c -o build/temp.linux-x86_64-3.8/cpy_mul.o
+gcc -pthread -shared -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now -fno-semantic-interposition -Wl,-O1,--sort-common,--as-needed,-z,relro,-z,now build/temp.linux-x86_64-3.8/cpy_mul.o -L/usr/lib -o /home/maddy/org/matrix-mul-py/cpy_mul.cpython-38-x86_64-linux-gnu.so
+running build_ext
+#+end_example
+
+*** Visualize profile
+
+Up on calling this script below; Make sure to have a look at the =html=
+for usage statistics
+
+#+begin_src sh
+cython -a cpy_mul.pyx
+#+end_src
+
+** Test cases
+
+1. Generate NxN random martixs as input
+2. Evaluate it against all implementation
+3. Check against reference implementation
+
+#+NAME: test-func
+#+begin_src python :result silent
+def generate_input(n):
+    from numpy.random import randint
+    X =randint(low=0,
+               high=100,
+               size=[n, n]).tolist()
+    Y = randint(low=0,
+                high=100,
+                size=[n, n]).tolist()
+    return (X, Y)
+
+def test_func(func ,X, Y):
+    from time import time
+    start = time()
+    results = func(X, Y)
+    return (results, time() - start)
+
+def status(max_size, number_of_runs, functions):
+    data = []
+    for n in range(max_size):
+        for _ in range(number_of_runs):
+            results_across_fuctions = {}
+            X, Y = generate_input(n)
+            for desc, func in functions.items():
+                results, t = test_func(func, X, Y)
+                data.append([n, t, desc])
+                results_across_fuctions[desc] = results
+            reference = results_across_fuctions.pop("Numpy")
+            for k, v in results_across_fuctions.items():
+                assert(v == reference).all(), f"oops {k} FAILED!"
+    return data
+#+end_src
+
+* Results
+
+   Helper funtion to visualize the results.
+   
+   #+NAME: visual-results
+ #+begin_src python :results silent
+def visualize(data):
+    import pandas as pd
+    import seaborn as sns
+
+    index = range(len(data))
+    run_df = pd.DataFrame(data, index, ["Array size nxn",
+                                        "Time in seconds",
+                                        "Implementation"])
+
+    ax = sns.lineplot(x="Array size nxn",
+                      y="Time in seconds",
+                      hue="Implementation",
+                      markers=True,
+                      dashes=False,
+                      data=run_df)
+    fig = ax.get_figure()
+    fig.savefig("output.png")
+ #+end_src
+
+
+   Putting all together; The performance of Cpython's implementation is
+   comparable to =numpy= ; as always there is room for improvement.
+
+   [[file:output.png][file:output.png]]
+
+   #+begin_src python :noweb yes 
+<<mm-np>>
+
+<<mm-py>>
+
+<<test-func>>
+
+<<visual-results>>
+
+from cpy_mul import cpy_mul
+
+max_size, number_of_runs = 15, 5
+
+visualize(
+    status(
+        max_size,
+        number_of_runs,
+        functions={"Numpy": np_matmul,
+                   "Python": py_lc,
+                   "Cython": cpy_mul}))
+ #+end_src
+
+ #+RESULTS:
+ : None
+
+ 
+* Reference
+
+1) https://cython.readthedocs.io/en/latest/index.html
+2) https://github.com/numpy/numpy/blob/e80b948dc527d41d9a1fd59b09a7c790783e1d90/numpy/core/src/multiarray/multiarraymodule.c#L2406
+3) https://realpython.com/python-vs-cpp/
+4) https://www.geeksforgeeks.org/ml-neural-network-implementation-in-c-from-scratch/
+5) https://towardsdatascience.com/under-the-hood-of-neural-network-forward-propagation-the-dreaded-matrix-multiplication-a5360b33426
+6) https://youtu.be/mXuEoqK4bEc
+7) https://www.youtube.com/watch?v=PQo78WNGiow
